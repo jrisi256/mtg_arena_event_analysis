@@ -68,8 +68,8 @@ calc_ev_negBinom <- function(df, win_rate, avg_nr_new_rares, play_in_point_value
             ev_gold = (ev_gold + play_in_points_in_gems) * gem_to_gold_ratio_arg,
             ev_gems = (ev_gems + play_in_points_in_gems),
             ev_rares = ev_rares + avg_nr_new_rares,
-            ratio_gold_per_rare = -ev_gold / ev_rares,
-            ratio_gems_per_rare = -ev_gems / ev_rares
+            ratio_gold_per_rare = if_else(-ev_gold > 0, -ev_gold / ev_rares, 0),
+            ratio_gems_per_rare = if_else(-ev_gems > 0, -ev_gems / ev_rares, 0)
         )
 }
 
@@ -100,8 +100,8 @@ calc_ev_binom <- function(df, win_rate, avg_nr_new_rares, play_in_point_value, g
             ev_gold = (ev_gold + play_in_points_in_gems) * gem_to_gold_ratio_arg,
             ev_gems = (ev_gems + play_in_points_in_gems),
             ev_rares = ev_rares + avg_nr_new_rares,
-            ratio_gold_per_rare = -ev_gold / ev_rares,
-            ratio_gems_per_rare = -ev_gems / ev_rares
+            ratio_gold_per_rare = if_else(-ev_gold > 0, -ev_gold / ev_rares, 0),
+            ratio_gems_per_rare = if_else(-ev_gems > 0, -ev_gems / ev_rares, 0)
         )
 }
 
@@ -511,7 +511,7 @@ args_tradeoff_draft_t <-
     expand_grid(
         win_rate = seq(0.01, 0.99, 0.0025),
         avg_nr_new_rares = seq(0, 8, 1),
-        play_in_points_value = 210
+        play_in_points_value = 45
     ) |>
     mutate(
         win_rate_bo3 =
@@ -521,7 +521,46 @@ args_tradeoff_draft_t <-
     )
 
 # Calculating the EV.
-ev_tradeoff_draft_t_45 <-
+ev_tradeoff_draft_q <-
+    pmap(
+        list(
+            args_tradeoff_draft_q$win_rate,
+            args_tradeoff_draft_q$avg_nr_new_rares,
+            args_tradeoff_draft_q$play_in_points_value
+        ),
+        calc_ev_negBinom,
+        df = event_draft_q
+    ) |>
+    bind_rows() |>
+    select(win_rate, avg_nr_new_rares, ratio_gold_per_rare, ratio_gems_per_rare)
+
+ev_tradeoff_draft_p <-
+    pmap(
+        list(
+            args_tradeoff_draft_pp2$win_rate,
+            args_tradeoff_draft_pp2$avg_nr_new_rares,
+            args_tradeoff_draft_pp2$play_in_points_value
+        ),
+        calc_ev_negBinom,
+        df = event_draft_p
+    ) |>
+    bind_rows() |>
+    select(win_rate, avg_nr_new_rares, ratio_gold_per_rare, ratio_gems_per_rare)
+
+ev_tradeoff_draft_p2 <-
+    pmap(
+        list(
+            args_tradeoff_draft_pp2$win_rate,
+            args_tradeoff_draft_pp2$avg_nr_new_rares,
+            args_tradeoff_draft_pp2$play_in_points_value
+        ),
+        calc_ev_negBinom,
+        df = event_draft_p2
+    ) |>
+    bind_rows() |>
+    select(win_rate, avg_nr_new_rares, ratio_gold_per_rare, ratio_gems_per_rare)
+
+ev_tradeoff_draft_t <-
     pmap(
         list(
             args_tradeoff_draft_t$win_rate_bo3,
@@ -539,35 +578,609 @@ ev_tradeoff_draft_t_45 <-
     ) |>
     select(win_rate, avg_nr_new_rares, ratio_gold_per_rare, ratio_gems_per_rare)
 
+# Find the focal events and evaluate the trade-off in wins vs. rares.
+search_space_tpp2 <-
+    expand_grid(
+        win_rate = c(0.4, 0.45, 0.5, 0.55, 0.6, 0.65),
+        avg_nr_new_rares = 0:7
+    )
 
+search_space_q <-
+    expand_grid(
+        win_rate = c(0.4, 0.45, 0.5, 0.55, 0.6, 0.65),
+        avg_nr_new_rares = 0:4
+    )
 
+################################################################################
+# Graph results for quick draft.
+tradeoff_gold_draft_q <-
+    pmap(
+        list(search_space_q$win_rate, search_space_q$avg_nr_new_rares),
+        function(df, win_rate_arg, avg_nr_new_rares_arg) {
+            focal <-
+                df |>
+                filter(
+                    near(win_rate, win_rate_arg),
+                    near(avg_nr_new_rares, avg_nr_new_rares_arg)
+                )
+            
+            tolerance <-
+                df |>
+                filter(
+                    ratio_gold_per_rare < focal$ratio_gold_per_rare &
+                        avg_nr_new_rares != focal$avg_nr_new_rares
+                ) |>
+                mutate(
+                    diff_ratio = abs(ratio_gold_per_rare - focal$ratio_gold_per_rare),
+                    diff_win_rate = win_rate - focal$win_rate
+                ) |>
+                group_by(avg_nr_new_rares) |>
+                filter(diff_ratio == min(diff_ratio)) |>
+                ungroup()
+            
+            final <-
+                bind_rows(focal, tolerance) |>
+                mutate(
+                    focal_win_rate = focal$win_rate,
+                    focal_nr_rares = focal$avg_nr_new_rares
+                )
+            
+            return(final)
+        },
+        df = ev_tradeoff_draft_q
+    )|>
+    bind_rows()
 
+tradeoff_gems_draft_q <-
+    pmap(
+        list(search_space_q$win_rate, search_space_q$avg_nr_new_rares),
+        function(df, win_rate_arg, avg_nr_new_rares_arg) {
+            focal <-
+                df |>
+                filter(
+                    near(win_rate, win_rate_arg),
+                    near(avg_nr_new_rares, avg_nr_new_rares_arg)
+                )
+            
+            tolerance <-
+                df |>
+                filter(
+                    ratio_gems_per_rare < focal$ratio_gems_per_rare &
+                        avg_nr_new_rares != focal$avg_nr_new_rares
+                ) |>
+                mutate(
+                    diff_ratio = abs(ratio_gems_per_rare - focal$ratio_gems_per_rare),
+                    diff_win_rate = win_rate - focal$win_rate
+                ) |>
+                group_by(avg_nr_new_rares) |>
+                filter(diff_ratio == min(diff_ratio)) |>
+                ungroup()
+            
+            final <-
+                bind_rows(focal, tolerance) |>
+                mutate(
+                    focal_win_rate = focal$win_rate,
+                    focal_nr_rares = focal$avg_nr_new_rares
+                )
+            
+            return(final)
+        },
+        df = ev_tradeoff_draft_q
+    )|>
+    bind_rows()
 
-
-
-
-
-a4 <- ev_tradeoff_draft_t_45 |> filter(win_rate == 0.6, avg_nr_new_rares == 3)
-
-a5 <-
-    ev_tradeoff_draft_t_45 |>
-    filter(ratio_gold_per_rare < a$ratio_gold_per_rare & avg_nr_new_rares != a$avg_nr_new_rares) |>
-    mutate(
-        diff_ratio = abs(ratio_gold_per_rare - a$ratio_gold_per_rare),
-        diff_win_rate = win_rate - a$win_rate
-    ) |>
-    group_by(avg_nr_new_rares) |>
-    filter(diff_ratio == min(diff_ratio)) |>
-    ungroup()
-    
-a6 <-
-    bind_rows(a, a2)
-
-ggplot(a3, aes(x = avg_nr_new_rares, y = diff_win_rate)) +
+graph_tradeoff_table_gold_q <-
+    ggplot(tradeoff_gold_draft_q, aes(x = avg_nr_new_rares, y = diff_win_rate)) +
     geom_bar(stat = "identity") +
-    theme_bw()
+    theme_bw() +
+    labs(
+        x = "Number of rares to draft",
+        y = "Tolerance for difference in win rate",
+        title = "Tradeoff in rares vs. win rate - Quick draft (Gold)"
+    ) +
+    facet_wrap(~focal_win_rate+focal_nr_rares, ncol = 5, scale = "free_y")
+ggsave(
+    here("om1_graphs", "tradeoff_rares_vs_wins_quick", "graph_tradeoff_table_gold_q.png"),
+    graph_tradeoff_table_gold_q,
+    height = 8,
+    width = 12
+)
 
-ggplot(a6, aes(x = avg_nr_new_rares, y = diff_win_rate)) +
+graph_tradeoff_table_gems_q <-
+    ggplot(tradeoff_gems_draft_q, aes(x = avg_nr_new_rares, y = diff_win_rate)) +
     geom_bar(stat = "identity") +
-    theme_bw()
+    theme_bw() +
+    labs(
+        x = "Number of rares to draft",
+        y = "Tolerance for difference in win rate",
+        title = "Tradeoff in rares vs. win rate - Quick draft (Gems)"
+    ) +
+    facet_wrap(~focal_win_rate+focal_nr_rares, ncol = 5, scale = "free_y")
+ggsave(
+    here("om1_graphs", "tradeoff_rares_vs_wins_quick", "graph_tradeoff_table_gems_q.png"),
+    graph_tradeoff_table_gems_q,
+    height = 8,
+    width = 12
+)
 
+graph_tradeoff_gold_q <-
+    ggplot(ev_draft_quick, aes(x = win_rate, y = ratio_gold_per_rare)) +
+    geom_point(aes(color = avg_nr_new_rares)) +
+    geom_line(aes(color = avg_nr_new_rares, group = avg_nr_new_rares)) +
+    theme_bw() +
+    guides(color = guide_colorbar(reverse = T)) +
+    labs(
+        x = "Win rate",
+        y = "Gold-to-rare ratio",
+        title = "Tradeoff in rares vs. win rate - Quick draft"
+    )
+ggsave(
+    here("om1_graphs", "tradeoff_rares_vs_wins_quick", "graph_tradeoff_gold_q.png"),
+    graph_tradeoff_gold_q,
+    height = 8,
+    width = 12
+)
+
+graph_tradeoff_gems_q <-
+    ggplot(ev_draft_quick, aes(x = win_rate, y = ratio_gems_per_rare)) +
+    geom_point(aes(color = avg_nr_new_rares)) +
+    geom_line(aes(color = avg_nr_new_rares, group = avg_nr_new_rares)) +
+    theme_bw() +
+    guides(color = guide_colorbar(reverse = T)) +
+    labs(
+        x = "Win rate",
+        y = "Gems-to-rare ratio",
+        title = "Tradeoff in rares vs. win rate - Quick draft"
+    )
+ggsave(
+    here("om1_graphs", "tradeoff_rares_vs_wins_quick", "graph_tradeoff_gems_q.png"),
+    graph_tradeoff_gems_q,
+    height = 8,
+    width = 12
+)
+
+################################################################################
+# Graph results for premier draft.
+tradeoff_gold_draft_p <-
+    pmap(
+        list(search_space_tpp2$win_rate, search_space_tpp2$avg_nr_new_rares),
+        function(df, win_rate_arg, avg_nr_new_rares_arg) {
+            focal <-
+                df |>
+                filter(
+                    near(win_rate, win_rate_arg),
+                    near(avg_nr_new_rares, avg_nr_new_rares_arg)
+                )
+            
+            tolerance <-
+                df |>
+                filter(
+                    ratio_gold_per_rare < focal$ratio_gold_per_rare &
+                        avg_nr_new_rares != focal$avg_nr_new_rares
+                ) |>
+                mutate(
+                    diff_ratio = abs(ratio_gold_per_rare - focal$ratio_gold_per_rare),
+                    diff_win_rate = win_rate - focal$win_rate
+                ) |>
+                group_by(avg_nr_new_rares) |>
+                filter(diff_ratio == min(diff_ratio)) |>
+                ungroup()
+            
+            final <-
+                bind_rows(focal, tolerance) |>
+                mutate(
+                    focal_win_rate = focal$win_rate,
+                    focal_nr_rares = focal$avg_nr_new_rares
+                )
+            
+            return(final)
+        },
+        df = ev_tradeoff_draft_p
+    )|>
+    bind_rows()
+
+tradeoff_gems_draft_p <-
+    pmap(
+        list(search_space_tpp2$win_rate, search_space_tpp2$avg_nr_new_rares),
+        function(df, win_rate_arg, avg_nr_new_rares_arg) {
+            focal <-
+                df |>
+                filter(
+                    near(win_rate, win_rate_arg),
+                    near(avg_nr_new_rares, avg_nr_new_rares_arg)
+                )
+            
+            tolerance <-
+                df |>
+                filter(
+                    ratio_gems_per_rare < focal$ratio_gems_per_rare &
+                        avg_nr_new_rares != focal$avg_nr_new_rares
+                ) |>
+                mutate(
+                    diff_ratio = abs(ratio_gems_per_rare - focal$ratio_gems_per_rare),
+                    diff_win_rate = win_rate - focal$win_rate
+                ) |>
+                group_by(avg_nr_new_rares) |>
+                filter(diff_ratio == min(diff_ratio)) |>
+                ungroup()
+            
+            final <-
+                bind_rows(focal, tolerance) |>
+                mutate(
+                    focal_win_rate = focal$win_rate,
+                    focal_nr_rares = focal$avg_nr_new_rares
+                )
+            
+            return(final)
+        },
+        df = ev_tradeoff_draft_p
+    )|>
+    bind_rows()
+
+graph_tradeoff_table_gold_p <-
+    ggplot(tradeoff_gold_draft_p, aes(x = avg_nr_new_rares, y = diff_win_rate)) +
+    geom_bar(stat = "identity") +
+    theme_bw() +
+    labs(
+        x = "Number of rares to draft",
+        y = "Tolerance for difference in win rate",
+        title = "Tradeoff in rares vs. win rate - Premier draft (Gold)"
+    ) +
+    facet_wrap(~focal_win_rate+focal_nr_rares, ncol = 8, scale = "free_y")
+ggsave(
+    here("om1_graphs", "tradeoff_rares_vs_wins_p", "graph_tradeoff_table_gold_p.png"),
+    graph_tradeoff_table_gold_p,
+    height = 8,
+    width = 12
+)
+
+graph_tradeoff_table_gems_p <-
+    ggplot(tradeoff_gems_draft_p, aes(x = avg_nr_new_rares, y = diff_win_rate)) +
+    geom_bar(stat = "identity") +
+    theme_bw() +
+    labs(
+        x = "Number of rares to draft",
+        y = "Tolerance for difference in win rate",
+        title = "Tradeoff in rares vs. win rate - Premier draft (Gems)"
+    ) +
+    facet_wrap(~focal_win_rate+focal_nr_rares, ncol = 8, scale = "free_y")
+ggsave(
+    here("om1_graphs", "tradeoff_rares_vs_wins_p", "graph_tradeoff_table_gems_p.png"),
+    graph_tradeoff_table_gems_p,
+    height = 8,
+    width = 12
+)
+
+graph_tradeoff_gold_p <-
+    ggplot(ev_draft_p, aes(x = win_rate, y = ratio_gold_per_rare)) +
+    geom_point(aes(color = avg_nr_new_rares)) +
+    geom_line(aes(color = avg_nr_new_rares, group = avg_nr_new_rares)) +
+    theme_bw() +
+    guides(color = guide_colorbar(reverse = T)) +
+    labs(
+        x = "Win rate",
+        y = "Gold-to-rare ratio",
+        title = "Tradeoff in rares vs. win rate - Premier draft"
+    )
+ggsave(
+    here("om1_graphs", "tradeoff_rares_vs_wins_p", "graph_tradeoff_gold_p.png"),
+    graph_tradeoff_gold_p,
+    height = 8,
+    width = 12
+)
+
+graph_tradeoff_gems_p <-
+    ggplot(ev_draft_p, aes(x = win_rate, y = ratio_gems_per_rare)) +
+    geom_point(aes(color = avg_nr_new_rares)) +
+    geom_line(aes(color = avg_nr_new_rares, group = avg_nr_new_rares)) +
+    theme_bw() +
+    guides(color = guide_colorbar(reverse = T)) +
+    labs(
+        x = "Win rate",
+        y = "Gems-to-rare ratio",
+        title = "Tradeoff in rares vs. win rate - Premier draft"
+    )
+ggsave(
+    here("om1_graphs", "tradeoff_rares_vs_wins_p", "graph_tradeoff_gems_p.png"),
+    graph_tradeoff_gems_p,
+    height = 8,
+    width = 12
+)
+
+################################################################################
+# Graph results for p2 draft.
+tradeoff_gold_draft_p2 <-
+    pmap(
+        list(search_space_tpp2$win_rate, search_space_tpp2$avg_nr_new_rares),
+        function(df, win_rate_arg, avg_nr_new_rares_arg) {
+            focal <-
+                df |>
+                filter(
+                    near(win_rate, win_rate_arg),
+                    near(avg_nr_new_rares, avg_nr_new_rares_arg)
+                )
+            
+            tolerance <-
+                df |>
+                filter(
+                    ratio_gold_per_rare < focal$ratio_gold_per_rare &
+                        avg_nr_new_rares != focal$avg_nr_new_rares
+                ) |>
+                mutate(
+                    diff_ratio = abs(ratio_gold_per_rare - focal$ratio_gold_per_rare),
+                    diff_win_rate = win_rate - focal$win_rate
+                ) |>
+                group_by(avg_nr_new_rares) |>
+                filter(diff_ratio == min(diff_ratio)) |>
+                ungroup()
+            
+            final <-
+                bind_rows(focal, tolerance) |>
+                mutate(
+                    focal_win_rate = focal$win_rate,
+                    focal_nr_rares = focal$avg_nr_new_rares
+                )
+            
+            return(final)
+        },
+        df = ev_tradeoff_draft_p2
+    )|>
+    bind_rows()
+
+tradeoff_gems_draft_p2 <-
+    pmap(
+        list(search_space_tpp2$win_rate, search_space_tpp2$avg_nr_new_rares),
+        function(df, win_rate_arg, avg_nr_new_rares_arg) {
+            focal <-
+                df |>
+                filter(
+                    near(win_rate, win_rate_arg),
+                    near(avg_nr_new_rares, avg_nr_new_rares_arg)
+                )
+            
+            tolerance <-
+                df |>
+                filter(
+                    ratio_gems_per_rare < focal$ratio_gems_per_rare &
+                        avg_nr_new_rares != focal$avg_nr_new_rares
+                ) |>
+                mutate(
+                    diff_ratio = abs(ratio_gems_per_rare - focal$ratio_gems_per_rare),
+                    diff_win_rate = win_rate - focal$win_rate
+                ) |>
+                group_by(avg_nr_new_rares) |>
+                filter(diff_ratio == min(diff_ratio)) |>
+                ungroup()
+            
+            final <-
+                bind_rows(focal, tolerance) |>
+                mutate(
+                    focal_win_rate = focal$win_rate,
+                    focal_nr_rares = focal$avg_nr_new_rares
+                )
+            
+            return(final)
+        },
+        df = ev_tradeoff_draft_p2
+    )|>
+    bind_rows()
+
+graph_tradeoff_table_gold_p2 <-
+    ggplot(tradeoff_gold_draft_p2, aes(x = avg_nr_new_rares, y = diff_win_rate)) +
+    geom_bar(stat = "identity") +
+    theme_bw() +
+    labs(
+        x = "Number of rares to draft",
+        y = "Tolerance for difference in win rate",
+        title = "Tradeoff in rares vs. win rate - P2 draft (Gold)"
+    ) +
+    facet_wrap(~focal_win_rate+focal_nr_rares, ncol = 8, scale = "free_y")
+ggsave(
+    here("om1_graphs", "tradeoff_rares_vs_wins_p2", "graph_tradeoff_table_gold_p2.png"),
+    graph_tradeoff_table_gold_p2,
+    height = 8,
+    width = 12
+)
+
+graph_tradeoff_table_gems_p2 <-
+    ggplot(tradeoff_gems_draft_p2, aes(x = avg_nr_new_rares, y = diff_win_rate)) +
+    geom_bar(stat = "identity") +
+    theme_bw() +
+    labs(
+        x = "Number of rares to draft",
+        y = "Tolerance for difference in win rate",
+        title = "Tradeoff in rares vs. win rate - P2 draft (Gems)"
+    ) +
+    facet_wrap(~focal_win_rate+focal_nr_rares, ncol = 8, scale = "free_y")
+ggsave(
+    here("om1_graphs", "tradeoff_rares_vs_wins_p2", "graph_tradeoff_table_gems_p2.png"),
+    graph_tradeoff_table_gems_p2,
+    height = 8,
+    width = 12
+)
+
+graph_tradeoff_gold_p2 <-
+    ggplot(ev_draft_p2, aes(x = win_rate, y = ratio_gold_per_rare)) +
+    geom_point(aes(color = avg_nr_new_rares)) +
+    geom_line(aes(color = avg_nr_new_rares, group = avg_nr_new_rares)) +
+    theme_bw() +
+    guides(color = guide_colorbar(reverse = T)) +
+    labs(
+        x = "Win rate",
+        y = "Gold-to-rare ratio",
+        title = "Tradeoff in rares vs. win rate - P2 draft"
+    )
+ggsave(
+    here("om1_graphs", "tradeoff_rares_vs_wins_p2", "graph_tradeoff_gold_p2.png"),
+    graph_tradeoff_gold_p2,
+    height = 8,
+    width = 12
+)
+
+graph_tradeoff_gems_p2 <-
+    ggplot(ev_draft_p2, aes(x = win_rate, y = ratio_gems_per_rare)) +
+    geom_point(aes(color = avg_nr_new_rares)) +
+    geom_line(aes(color = avg_nr_new_rares, group = avg_nr_new_rares)) +
+    theme_bw() +
+    guides(color = guide_colorbar(reverse = T)) +
+    labs(
+        x = "Win rate",
+        y = "Gems-to-rare ratio",
+        title = "Tradeoff in rares vs. win rate - P2 draft"
+    )
+ggsave(
+    here("om1_graphs", "tradeoff_rares_vs_wins_p2", "graph_tradeoff_gems_p2.png"),
+    graph_tradeoff_gems_p2,
+    height = 8,
+    width = 12
+)
+
+################################################################################
+# Graph results for traditional draft.
+tradeoff_gold_draft_t <-
+    pmap(
+        list(search_space_tpp2$win_rate, search_space_tpp2$avg_nr_new_rares),
+        function(df, win_rate_arg, avg_nr_new_rares_arg) {
+            focal <-
+                df |>
+                filter(
+                    near(win_rate, win_rate_arg),
+                    near(avg_nr_new_rares, avg_nr_new_rares_arg)
+                )
+            
+            tolerance <-
+                df |>
+                filter(
+                    ratio_gold_per_rare < focal$ratio_gold_per_rare &
+                        avg_nr_new_rares != focal$avg_nr_new_rares
+                ) |>
+                mutate(
+                    diff_ratio = abs(ratio_gold_per_rare - focal$ratio_gold_per_rare),
+                    diff_win_rate = win_rate - focal$win_rate
+                ) |>
+                group_by(avg_nr_new_rares) |>
+                filter(diff_ratio == min(diff_ratio)) |>
+                ungroup()
+            
+            final <-
+                bind_rows(focal, tolerance) |>
+                mutate(
+                    focal_win_rate = focal$win_rate,
+                    focal_nr_rares = focal$avg_nr_new_rares
+                )
+            
+            return(final)
+        },
+        df = ev_tradeoff_draft_t
+    )|>
+    bind_rows()
+
+tradeoff_gems_draft_t <-
+    pmap(
+        list(search_space_tpp2$win_rate, search_space_tpp2$avg_nr_new_rares),
+        function(df, win_rate_arg, avg_nr_new_rares_arg) {
+            focal <-
+                df |>
+                filter(
+                    near(win_rate, win_rate_arg),
+                    near(avg_nr_new_rares, avg_nr_new_rares_arg)
+                )
+
+            tolerance <-
+                df |>
+                filter(
+                    ratio_gems_per_rare < focal$ratio_gems_per_rare &
+                        avg_nr_new_rares != focal$avg_nr_new_rares
+                ) |>
+                mutate(
+                    diff_ratio = abs(ratio_gems_per_rare - focal$ratio_gems_per_rare),
+                    diff_win_rate = win_rate - focal$win_rate
+                ) |>
+                group_by(avg_nr_new_rares) |>
+                filter(diff_ratio == min(diff_ratio)) |>
+                ungroup()
+            
+            final <-
+                bind_rows(focal, tolerance) |>
+                mutate(
+                    focal_win_rate = focal$win_rate,
+                    focal_nr_rares = focal$avg_nr_new_rares
+                )
+            
+            return(final)
+        },
+        df = ev_tradeoff_draft_t
+    )|>
+    bind_rows()
+
+graph_tradeoff_table_gold_t <-
+    ggplot(tradeoff_gold_draft_t, aes(x = avg_nr_new_rares, y = diff_win_rate)) +
+    geom_bar(stat = "identity") +
+    theme_bw() +
+    labs(
+        x = "Number of rares to draft",
+        y = "Tolerance for difference in win rate",
+        title = "Tradeoff in rares vs. win rate - Traditional draft (Gold)"
+    ) +
+    facet_wrap(~focal_win_rate+focal_nr_rares, ncol = 8, scale = "free_y")
+ggsave(
+    here("om1_graphs", "tradeoff_rares_vs_wins_t", "graph_tradeoff_table_gold_t.png"),
+    graph_tradeoff_table_gold_t,
+    height = 8,
+    width = 12
+)
+
+graph_tradeoff_table_gems_t <-
+    ggplot(tradeoff_gems_draft_t, aes(x = avg_nr_new_rares, y = diff_win_rate)) +
+    geom_bar(stat = "identity") +
+    theme_bw() +
+    labs(
+        x = "Number of rares to draft",
+        y = "Tolerance for difference in win rate",
+        title = "Tradeoff in rares vs. win rate - Traditional draft (Gems)"
+    ) +
+    facet_wrap(~focal_win_rate+focal_nr_rares, ncol = 8, scale = "free_y")
+ggsave(
+    here("om1_graphs", "tradeoff_rares_vs_wins_t", "graph_tradeoff_table_gems_t.png"),
+    graph_tradeoff_table_gems_t,
+    height = 8,
+    width = 12
+)
+
+graph_tradeoff_gold_t <-
+    ggplot(ev_draft_t, aes(x = win_rate, y = ratio_gold_per_rare)) +
+    geom_point(aes(color = avg_nr_new_rares)) +
+    geom_line(aes(color = avg_nr_new_rares, group = avg_nr_new_rares)) +
+    theme_bw() +
+    guides(color = guide_colorbar(reverse = T)) +
+    facet_wrap(~play_in_point_value) +
+    labs(
+        x = "Win rate",
+        y = "Gold-to-rare ratio",
+        title = "Tradeoff in rares vs. win rate - Traditional draft"
+    )
+ggsave(
+    here("om1_graphs", "tradeoff_rares_vs_wins_t", "graph_tradeoff_gold_t.png"),
+    graph_tradeoff_gold_t,
+    height = 8,
+    width = 12
+)
+
+graph_tradeoff_gems_t <-
+    ggplot(ev_draft_t, aes(x = win_rate, y = ratio_gems_per_rare)) +
+    geom_point(aes(color = avg_nr_new_rares)) +
+    geom_line(aes(color = avg_nr_new_rares, group = avg_nr_new_rares)) +
+    theme_bw() +
+    guides(color = guide_colorbar(reverse = T)) +
+    facet_wrap(~play_in_point_value) +
+    labs(
+        x = "Win rate",
+        y = "Gems-to-rare ratio",
+        title = "Tradeoff in rares vs. win rate - Traditional draft"
+    )
+ggsave(
+    here("om1_graphs", "tradeoff_rares_vs_wins_t", "graph_tradeoff_gems_t.png"),
+    graph_tradeoff_gems_t,
+    height = 8,
+    width = 12
+)
